@@ -245,4 +245,6 @@ def metrics():
 iniciar_db()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # VULN-05: sin modo debug (consola Werkzeug = ejecución remota de código) y solo en localhost (CWE-489/CWE-605).
+    # En staging/producción la app corre con gunicorn (scripts/deploy.sh).
+    app.run(host="127.0.0.1", port=5000, debug=False)
