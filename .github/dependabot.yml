@@ -1,0 +1,27 @@
+# Dependabot: gestion automatica de dependencias de Sistema Alumnos (EV3 OCY1102)
+# - Revisa requirements.txt y requirements-dev.txt (pip) todos los dias.
+# - Abre PR con las actualizaciones; cada PR fusionado dispara el pipeline de Jenkins
+#   (pruebas + Bandit + pip-audit + OWASP ZAP) que verifica que no entren nuevas vulnerabilidades.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "08:00"
+      timezone: "America/Santiago"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+    commit-message:
+      prefix: "deps"
+    groups:
+      actualizaciones-de-seguridad:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      dependencias-python:
+        applies-to: version-updates
+        patterns:
+          - "*"
