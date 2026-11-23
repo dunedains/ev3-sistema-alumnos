@@ -125,6 +125,31 @@ def antes_de_la_peticion():
             app.logger.warning("Petición sospechosa (%s) desde %s a %s", tipo, request.remote_addr, request.path)
 
 
+## VULN-07: cabeceras de seguridad en todas las respuestas (CWE-693 / CWE-1021).
+CABECERAS_SEGURIDAD = {
+    "Content-Security-Policy": "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; "
+                               "frame-ancestors 'none'; base-uri 'none'",
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cache-Control": "no-store",
+}
+
+
+@app.after_request
+def cabeceras_seguridad(respuesta):
+    """!
+    @brief Agrega las cabeceras de seguridad HTTP a cada respuesta.
+    @param respuesta Respuesta que Flask enviará al cliente.
+    @return La misma respuesta con las cabeceras.
+    """
+    for nombre, valor in CABECERAS_SEGURIDAD.items():
+        respuesta.headers.setdefault(nombre, valor)
+    return respuesta
+
+
 @app.after_request
 def despues_de_la_peticion(respuesta):
     """!
