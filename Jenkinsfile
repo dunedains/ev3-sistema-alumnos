@@ -1,7 +1,7 @@
 // Jenkinsfile - Pipeline de "Sistema Alumnos" (SecureDev · Evaluación Parcial 3 · OCY1102)
 //
-// Esta es la versión BASE: construye, prueba y despliega en producción.
-// Los marcadores  >>> [ETIQUETA]  indican dónde agregar las etapas de seguridad.
+// Build -> Test -> SAST (Bandit) -> SCA (pip-audit) -> Deploy Staging -> DAST (OWASP ZAP) -> [gate] -> Deploy Producción.
+// Cualquier hallazgo Medium/High deja el build UNSTABLE y el gate impide desplegar en producción.
 pipeline {
     agent any
 
@@ -49,12 +49,54 @@ pipeline {
             }
         }
 
-        // >>> [SEGURIDAD]: aquí van las etapas "Security Review (SAST)" y "Dependency Management"
+        // [SEGURIDAD] Revisión continua del código (SAST) en cada build
+        stage('Security Review (SAST)') {
+            steps {
+                sh 'bandit -r app.py -f json -o reports/bandit.json || true'
+                sh 'bandit -r app.py -f txt -o reports/bandit.txt || true'
+                script {
+                    // Hallazgos Medium o High marcan el build como UNSTABLE y bloquean producción
+                    def rc = sh(returnStatus: true, script: 'bandit -q -r app.py -ll')
+                    if (rc != 0) { unstable('Bandit: hay hallazgos de severidad Medium/High en app.py') }
+                }
+            }
+        }
 
-        // >>> [ZAP]: aquí van las etapas "Deploy Staging" y "DAST - OWASP ZAP"
+        // [SEGURIDAD] Dependencias con vulnerabilidades conocidas (SCA)
+        stage('Dependency Management') {
+            steps {
+                sh 'pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true'
+                script {
+                    def rc = sh(returnStatus: true, script: 'pip-audit -r requirements.txt --desc on > reports/pip-audit.txt 2>&1')
+                    sh 'cat reports/pip-audit.txt'
+                    if (rc != 0) { unstable('pip-audit: hay dependencias con vulnerabilidades conocidas (CVE/GHSA)') }
+                }
+            }
+        }
+
+        // [ZAP] Despliegue en staging para el análisis dinámico
+        stage('Deploy Staging') {
+            steps {
+                sh 'bash scripts/deploy.sh staging 5001'
+            }
+        }
+
+        // [ZAP] Pruebas automatizadas de seguridad (DAST) con OWASP ZAP sobre staging
+        stage('DAST - OWASP ZAP') {
+            steps {
+                script {
+                    def rc = sh(returnStatus: true, script: 'python3 scripts/zap_scan.py http://jenkins:5001')
+                    if (rc == 2) { unstable('OWASP ZAP: hay alertas de riesgo High/Medium') }
+                    else if (rc != 0) { error('El escaneo de OWASP ZAP falló') }
+                }
+            }
+        }
 
         stage('Deploy Producción') {
-            // >>> [GATE]: aquí va la condición "when" que protege producción
+            // [GATE] Solo se despliega a producción si TODAS las revisiones de seguridad pasaron (build SUCCESS)
+            when {
+                expression { currentBuild.currentResult == 'SUCCESS' }
+            }
             steps {
                 sh 'bash scripts/deploy.sh produccion 5000'
                 script { env.PRODUCCION = env.APP_VERSION }
