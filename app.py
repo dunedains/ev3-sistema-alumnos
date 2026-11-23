@@ -12,7 +12,7 @@ import secrets
 import sqlite3
 import time
 
-from flask import Flask, Response, g, jsonify, render_template_string, request
+from flask import Flask, Response, g, jsonify, render_template_string, request, session
 from markupsafe import escape
 from werkzeug.security import check_password_hash
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
@@ -22,6 +22,7 @@ app = Flask(__name__)
 ## VULN-03: sin secretos en el código (CWE-798). La clave de la app y el hash del administrador
 ## llegan por variables de entorno; si no existen, la clave es aleatoria y el login de admin queda deshabilitado.
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 ADMIN_USUARIO = os.environ.get("ADMIN_USUARIO", "admin")
 ## VULN-04: hash con sal y costo (scrypt/pbkdf2 de Werkzeug) en lugar de MD5 (CWE-327/CWE-916).
 ADMIN_CLAVE_HASH = os.environ.get("ADMIN_CLAVE_HASH", "")
@@ -71,6 +72,7 @@ PORTADA = """<!doctype html>
 </form>
 <h2>Acceso administrador</h2>
 <form action="/login" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input name="usuario" value="admin"> <input name="clave" type="password" value="">
   <button type="submit">Entrar</button>
 </form>
@@ -170,7 +172,10 @@ def portada():
     @brief Portada HTML con enlaces y formularios del sistema.
     @return Página HTML.
     """
-    return render_template_string(PORTADA, version=VERSION)
+    # VULN-08: token anti-CSRF ligado a la sesión para el formulario de login (CWE-352)
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_urlsafe(32)
+    return render_template_string(PORTADA, version=VERSION, csrf_token=session["csrf_token"])
 
 
 @app.route("/hello")
@@ -249,6 +254,10 @@ def login():
     @brief Valida las credenciales del administrador enviadas por formulario.
     @return JSON con el resultado; 401 si las credenciales no son válidas.
     """
+    token = request.form.get("csrf_token", "")
+    if not token or not hmac.compare_digest(token, session.get("csrf_token", "")):
+        SOSPECHOSAS.labels(tipo="csrf").inc()
+        return jsonify({"error": "Token CSRF inválido o ausente"}), 400
     usuario = request.form.get("usuario", "")
     clave = request.form.get("clave", "")
     usuario_ok = hmac.compare_digest(usuario.encode(), ADMIN_USUARIO.encode())
