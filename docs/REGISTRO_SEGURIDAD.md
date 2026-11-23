@@ -55,5 +55,40 @@ Reglas (evaluación cada 10 s): **Fuerza bruta en /login** (> 5 logins fallidos/
 
 | Hora | Panel / métrica de Grafana | Qué se observó | Entorno | Clasificación | Acción de respuesta | Verificación |
 |---|---|---|---|---|---|---|
-| 23-11 16:52 | *Logins fallidos (5 min)* / `login_fallidos_total` | 30 logins fallidos en < 1 min desde una sola IP; 1 login exitoso al final (clave `admin` adivinada). Alerta **Fuerza bruta** en *Firing* | Producción 1.0.1+9b3d738 | Incidente **alto**: fuerza bruta exitosa sobre la cuenta admin (CWE-307 + CWE-798/327) | Desplegar la versión corregida (VULN-03/04/09) por el pipeline; credencial del admin fuera del código | Ver fila de verificación (sección 6) |
-| 23-11 16:52 | *Peticiones sospechosas por tipo* / `peticiones_sospechosas_total{tipo}` | Picos de `sqli`, `xss` y `path_traversal`; la inyección SQL devolvió el esquema de la BD. Alerta **XSS/SQLi** en *Firing* | Producción 1.0.1+9b3d738 | Incidente **alto**: explotación de inyección SQL y XSS reflejado | Desplegar VULN-01/02/06/07 (gate del pipeline) | Ver sección 6 |
+| 23-11 16:52 | *Logins fallidos (5 min)* / `login_fallidos_total` | 30 logins fallidos en < 1 min desde una sola IP; 1 login exitoso al final (clave `admin` adivinada). Alerta **Fuerza bruta** en *Firing* | Producción 1.0.1+9b3d738 | Incidente **alto**: fuerza bruta exitosa sobre la cuenta admin (CWE-307 + CWE-798/327) | Desplegar la versión corregida (VULN-03/04/09) por el pipeline; credencial del admin fuera del código | Build #6 desplegó 1.0.6+b14dde5 (17:00) |
+| 23-11 16:52 | *Peticiones sospechosas por tipo* / `peticiones_sospechosas_total{tipo}` | Picos de `sqli`, `xss` y `path_traversal`; la inyección SQL devolvió el esquema de la BD. Alerta **XSS/SQLi** en *Firing* | Producción 1.0.1+9b3d738 | Incidente **alto**: explotación de inyección SQL y XSS reflejado | Desplegar VULN-01/02/06/07 (gate del pipeline) | Build #6 desplegó 1.0.6+b14dde5 (17:00) |
+| 23-11 17:01 | *Intentos de login* (serie *bloqueados HTTP 429*) y *Peticiones sospechosas* (`fuerza_bruta`) | Mismo ataque (`scripts/simular_ataque.py`) contra la versión corregida: 31/31 intentos bloqueados con HTTP 429, la inyección SQL no devuelve datos y el XSS sale escapado. La alerta de fuerza bruta se dispara de nuevo (17:02): la detección sigue activa | Producción 1.0.6+b14dde5 | **Verificación**: ataque detectado y bloqueado, sin impacto | Ninguna adicional (incidente cerrado); se mantiene el monitoreo | Historial de la alerta: Alerting 16:53 → Normal 16:55 → Alerting 17:02 (bloqueado) |
+
+**Respuesta resumida:** detección (alertas Grafana 16:53) → análisis (paneles por tipo y logs de la app) → clasificación
+(alto, explotación exitosa en 1.0.1) → contención/corrección (merge de los fixes y del PR de Dependabot, gate en verde,
+despliegue #6) → verificación (re-ataque 17:01 bloqueado, `/version` = 1.0.6+b14dde5).
+
+## 5. Gestión de dependencias
+
+Proceso: `pip-audit` en cada build (etapa *Dependency Management*) + Dependabot (`.github/dependabot.yml`, revisión diaria,
+grupo `dependencias-python`, alertas y *security updates* activados). Dependabot abrió el **PR #1** con las 6 actualizaciones;
+se fusionó como `b14dde5` (DEP-02) y el pipeline completo (pruebas, Bandit, pip-audit y ZAP) lo verificó en el **build #6**
+antes de desplegar. Las pruebas funcionales (9/9) pasaron con Flask 3 sin cambios en el código.
+
+| Paquete | Versión inicial | Vulnerabilidades (IDs) | Versión final | Origen del cambio (PR de Dependabot / manual) | ¿Pruebas, pip-audit y ZAP siguen OK? Build |
+|---|---|---|---|---|---|
+| Flask | 2.2.2 | PYSEC-2023-62, PYSEC-2026-2151 | 3.1.3 | PR #1 de Dependabot | Sí · #6 (9/9, 0 vuln., ZAP 0/0/0) |
+| Werkzeug | 2.2.2 | PYSEC-2023-57, PYSEC-2023-58, PYSEC-2023-221, PYSEC-2026-2043, -2044, -2045, -2046, -2320, -3417, -4312 | 3.1.9 | PR #1 de Dependabot | Sí · #6 |
+| Jinja2 | 3.1.2 | PYSEC-2026-1471, -1472, -1473, -1474, -1475 | 3.1.6 | PR #1 de Dependabot | Sí · #6 |
+| gunicorn | 21.2.0 | PYSEC-2026-1433, PYSEC-2026-1434 (HTTP request smuggling) | 27.0.1 | PR #1 de Dependabot | Sí · #6 |
+| prometheus-client | 0.17.1 | — (sin CVE conocidas) | 0.26.0 | PR #1 de Dependabot | Sí · #6 |
+| pytest (dev) | 8.3.4 | — | 9.2.0 | PR #1 de Dependabot | Sí · #6 |
+
+Total: **19 vulnerabilidades en 4 paquetes (build #2) → 0 (build #6)**.
+
+## 6. Trazabilidad
+
+El registro completo que genera Jenkins está en `docs/TRAZABILIDAD.md` (copia del artefacto `reports/TRAZABILIDAD.md`).
+Versión de la app = `1.0.<build>+<commit>`, visible en `/version` y en Grafana (`app_info`).
+
+| Actividad | Hallazgo | Build que lo detectó | Commit / PR que lo resolvió | Build que lo verificó | Versión en producción |
+|---|---|---|---|---|---|
+| Revisión de seguridad (Bandit) | B324 MD5 (High), B201 debug (High), B608 SQL (Medium), B104 (Medium), B105 (Low) | #2 | `f41732e` VULN-01, `f029477` VULN-03, `56c6a0f` VULN-04, `f6f3163` VULN-05 | #3 (0/0/0) | 1.0.6+b14dde5 |
+| Prueba automatizada (OWASP ZAP) | XSS reflejado/DOM y SQLi (High); CSP, anti-clickjacking, anti-CSRF (Medium) | #2 | `a64e634` VULN-02, `1f74122` VULN-06, `8ddbc2d` VULN-07, `9b9bd6a` VULN-08 | #3 (0/1/0), #4 (0/0/0) | 1.0.6+b14dde5 |
+| Gestión de dependencias (Dependabot) | 19 vulnerabilidades en Flask, Werkzeug, Jinja2 y gunicorn (pip-audit) | #2 | PR #1 → `b14dde5` (DEP-02) | #6 (0 vuln., SUCCESS) | 1.0.6+b14dde5 |
+| Monitoreo (Grafana) | Fuerza bruta + inyección en producción 1.0.1 | 16:53 (alertas) | `dd5bb6f` VULN-09 + despliegue #6 | Re-ataque 17:01 bloqueado | 1.0.6+b14dde5 |
