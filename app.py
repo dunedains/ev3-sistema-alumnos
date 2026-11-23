@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 import time
 
 from flask import Flask, Response, g, jsonify, render_template_string, request, session
@@ -54,6 +55,35 @@ PATRONES_ATAQUE = {
     "sqli": re.compile(r"('|%27)\s*(or|and|union)\b|union\s+select|--|;\s*drop\b|sleep\(", re.I),
     "path_traversal": re.compile(r"\.\./|\.\.\\|%2e%2e", re.I),
 }
+
+## VULN-09: límite de intentos fallidos de login por IP (CWE-307).
+MAX_FALLIDOS = int(os.environ.get("LOGIN_MAX_FALLIDOS", "5"))
+VENTANA_S = int(os.environ.get("LOGIN_VENTANA_S", "300"))
+_fallidos_por_ip = {}
+_candado = threading.Lock()
+
+
+def _bloqueado(ip):
+    """!
+    @brief Indica si la IP superó el máximo de intentos fallidos dentro de la ventana.
+    @param ip Dirección IP del cliente.
+    @return True si la IP está bloqueada temporalmente.
+    """
+    ahora = time.time()
+    with _candado:
+        recientes = [t for t in _fallidos_por_ip.get(ip, []) if ahora - t < VENTANA_S]
+        _fallidos_por_ip[ip] = recientes
+        return len(recientes) >= MAX_FALLIDOS
+
+
+def _registrar_fallido(ip):
+    """!
+    @brief Registra un intento fallido de login para la IP.
+    @param ip Dirección IP del cliente.
+    """
+    with _candado:
+        _fallidos_por_ip.setdefault(ip, []).append(time.time())
+
 
 PORTADA = """<!doctype html>
 <html lang="es">
@@ -254,6 +284,11 @@ def login():
     @brief Valida las credenciales del administrador enviadas por formulario.
     @return JSON con el resultado; 401 si las credenciales no son válidas.
     """
+    ip = request.remote_addr or "desconocida"
+    if _bloqueado(ip):
+        SOSPECHOSAS.labels(tipo="fuerza_bruta").inc()
+        app.logger.warning("Login bloqueado por fuerza bruta desde %s", ip)
+        return jsonify({"error": "Demasiados intentos. Intenta más tarde."}), 429
     token = request.form.get("csrf_token", "")
     if not token or not hmac.compare_digest(token, session.get("csrf_token", "")):
         SOSPECHOSAS.labels(tipo="csrf").inc()
@@ -265,6 +300,7 @@ def login():
         LOGIN_EXITOSOS.inc()
         return jsonify({"mensaje": "Bienvenido, administrador"})
     LOGIN_FALLIDOS.inc()
+    _registrar_fallido(ip)
     app.logger.warning("Login fallido para el usuario '%s' desde %s", usuario, request.remote_addr)
     return jsonify({"error": "Credenciales inválidas"}), 401
 
